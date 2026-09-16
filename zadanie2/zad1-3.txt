@@ -1,0 +1,176 @@
+#Najczyściej wykonaj taki zestaw:
+sudo bash ./tools/netns.sh create pc1
+sudo bash ./tools/netns.sh create pc2
+sudo bash ./tools/netns.sh create r1
+
+sudo ip link add veth-pc1 type veth peer name veth-r1-pc1
+sudo ip link set veth-pc1 netns pc1
+sudo ip link set veth-r1-pc1 netns r1
+
+sudo ip link add veth-pc2 type veth peer name veth-r1-pc2
+sudo ip link set veth-pc2 netns pc2
+sudo ip link set veth-r1-pc2 netns r1
+
+#adresy
+
+sudo ip netns exec pc1 ip addr add 10.11.11.2/24 dev veth-pc1
+sudo ip netns exec r1 ip addr add 10.11.11.1/24 dev veth-r1-pc1
+
+sudo ip netns exec pc2 ip addr add 10.12.12.2/24 dev veth-pc2
+sudo ip netns exec r1 ip addr add 10.12.12.1/24 dev veth-r1-pc2
+
+#Uruchomienie interfejsów:
+sudo ip netns exec pc1 ip link set lo up
+sudo ip netns exec pc1 ip link set veth-pc1 up
+
+sudo ip netns exec pc2 ip link set lo up
+sudo ip netns exec pc2 ip link set veth-pc2 up
+
+sudo ip netns exec r1 ip link set lo up
+sudo ip netns exec r1 ip link set veth-r1-pc1 up
+sudo ip netns exec r1 ip link set veth-r1-pc2 up
+
+#Routing:
+sudo ip netns exec r1 sysctl -w net.ipv4.ip_forward=1
+
+sudo ip netns exec pc1 ip route add default via 10.11.11.1
+sudo ip netns exec pc2 ip route add default via 10.12.12.1
+
+#Test:
+sudo ip netns exec pc1 ping -c 3 10.11.11.1
+sudo ip netns exec pc2 ping -c 3 10.12.12.1
+sudo ip netns exec pc1 ping -c 3 10.12.12.2
+
+---------- zad 3
+Przykładowo skonfiguruj r1 jako router dla sieci pc1, używając podsieci IPv6:
+text
+
+fd00:11:11::/64
+
+Adres routera będzie:
+text
+
+fd00:11:11::1/64
+
+Najpierw ustaw adres IPv6 na interfejsie routera:
+
+sudo ip -n r1 -6 addr add fd00:11:11::1/64 dev veth-r1-pc1
+sudo ip -n r1 link set veth-r1-pc1 up
+
+Włącz IPv6 forwarding:
+
+sudo ip netns exec r1 sysctl -w net.ipv6.conf.all.forwarding=1
+
+Jeśli dnsmasq nie jest zainstalowany:
+
+sudo apt install dnsmasq
+
+Następnie uruchom go w przestrzeni r1:
+
+sudo ip netns exec r1 dnsmasq \
+  --no-daemon \
+  --interface=veth-r1-pc1 \
+  --bind-interfaces \
+  --enable-ra \
+  --dhcp-range=fd00:11:11::100,fd00:11:11::1ff,constructor:veth-r1-pc1,ra-stateless,12h \
+  --dhcp-option=option6:dns-server,[2606:4700:4700::111] \
+  --server=1.1.1.1
+
+Najważniejsze opcje:
+
+    --interface=veth-r1-pc1 — nasłuchiwanie na interfejsie routera,
+    --enable-ra — włączenie komunikatów IPv6 Router Advertisement,
+    --dhcp-range=... — pula adresów przydzielanych klientom,
+    ra-stateless — adres IPv6 klienta powstaje przez SLAAC, a DHCPv6 przekazuje dodatkowe informacje, np. DNS,
+    --dhcp-option=option6:dns-server,... — adres serwera DNS przekazywany klientom,
+    --server=1.1.1.1 — serwer DNS, z którego dnsmasq korzysta do rozwiązywania nazw,
+    --no-daemon — uruchomienie w pierwszym planie, wygodne do testowania.
+
+Jeśli zadanie wymaga przydzielania adresów bezpośrednio przez DHCPv6, zamiast SLAAC, użyj:
+
+sudo ip netns exec r1 dnsmasq \
+  --no-daemon \
+  --interface=veth-r1-pc1 \
+  --bind-interfaces \
+  --enable-ra \
+  --dhcp-range=fd00:11:11::100,fd00:11:11::1ff,64,12h \
+  --dhcp-option=option6:dns-server,[2606:4700:4700::111] \
+  --server=1.1.1.1
+
+Wariant z ra-stateless jest zwykle wygodniejszy w laboratorium, ponieważ klient uzyskuje adres przez SLAAC, a dnsmasq wysyła RA i informacje DHCPv6.
+
+Jeżeli chcesz obsłużyć również pc2, użyj drugiej podsieci, np.:
+
+sudo ip -n r1 -6 addr add fd00:12:12::1/64 dev veth-r1-pc2
+sudo ip -n r1 link set veth-r1-pc2 up
+
+Uruchom drugi proces dnsmasq na innym interfejsie i z innym plikiem dzierżaw:
+
+sudo ip netns exec r1 dnsmasq \
+  --no-daemon \
+  --interface=veth-r1-pc2 \
+  --bind-interfaces \
+  --enable-ra \
+  --dhcp-range=fd00:12:12::100,fd00:12:12::1ff,constructor:veth-r1-pc2,ra-stateless,12h \
+  --dhcp-option=option6:dns-server,[2606:4700:4700::111] \
+  --server=1.1.1.1 \
+  --dhcp-leasefile=/tmp/dnsmasq-r1-pc2.leases \
+  --pid-file=/tmp/dnsmasq-r1-pc2.pid
+
+Na kliencie pc1 możesz sprawdzić otrzymany adres:
+
+sudo ip netns exec pc1 ip -6 addr
+
+Trasy:
+
+sudo ip netns exec pc1 ip -6 route
+
+Test komunikacji z routerem:
+
+sudo ip netns exec pc1 ping -6 -c 3 fd00:11:11::1
+
+Jeśli klient nie otrzyma adresu, sprawdź, czy jego interfejs i loopback są włączone:
+
+sudo ip netns exec pc1 ip link set lo up
+sudo ip netns exec pc1 ip link set veth-pc1 up
+
+Możesz też obserwować komunikaty DHCPv6 i RA:
+
+sudo ip netns exec r1 tcpdump -i veth-r1-pc1 -n -vv 'icmp6 or port 546 or port 547'
+
+Ważne: jeśli uruchamiasz dnsmasq z --no-daemon, terminal pozostanie zajęty. Do uruchomienia w tle dodaj na końcu &:
+
+dla obu pc*
+sudo ip netns exec r1 dnsmasq \
+  --no-daemon \
+  --interface=veth-r1-pc1 \
+  --interface=veth-r1-pc2 \
+  --bind-interfaces \
+  --enable-ra \
+  --dhcp-range=fd00:11:11::100,fd00:11:11::1ff,64,12h \
+  --dhcp-range=fd00:12:12::100,fd00:12:12::1ff,64,12h \
+  --dhcp-option=option6:dns-server,[2606:4700:4700::111] \
+  --server=1.1.1.1 \
+  --dhcp-leasefile=/tmp/dnsmasq-r1.leases \
+  --pid-file=/tmp/dnsmasq-r1.pid
+
+
+- konfiguracja na interfejsie
+sudo ip netns exec pc1 sysctl -w net.ipv6.conf.veth-pc1.accept_ra=1
+sudo ip netns exec pc1 sysctl -w net.ipv6.conf.all.autoconf=1
+
+Następnie na pc1 włącz automatyczną konfigurację IPv6:
+
+sudo ip netns exec pc1 sysctl -w net.ipv6.conf.veth-pc1.accept_ra=1
+sudo ip netns exec pc1 sysctl -w net.ipv6.conf.all.autoconf=1
+
+Usuń ewentualny stary adres i wymuś ponowne wygenerowanie konfiguracji:
+
+sudo ip netns exec pc1 ip -6 addr flush dev veth-pc1 scope global
+sudo ip netns exec pc1 ip link set veth-pc1 down
+sudo ip netns exec pc1 ip link set veth-pc1 up
+
+Odczekaj kilka sekund i sprawdź:
+
+sudo ip netns exec pc1 ip -6 addr show dev veth-pc1
+
