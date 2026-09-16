@@ -1,0 +1,118 @@
+git@github.com:KamilSlobodzian77/devops-tut.git
+
+instalacja qemu itd
+sudo apt install -y \
+  qemu-kvm \
+  libvirt-daemon-system \
+  libvirt-clients \
+  virt-manager \
+  virt-viewer \
+  virtinst
+
+
+ Uruchom usługę libvirt
+
+sudo systemctl enable --now libvirtd
+
+#Sprawdź jej stan:
+
+systemctl status libvirtd
+
+#eśli w Twojej wersji Mint nie istnieje usługa libvirtd, sprawdź dostępne usługi libvirt:
+
+systemctl list-unit-files | grep -E 'libvirt|virtqemu'
+
+W nowszych instalacjach można uruchomić odpowiednie gniazda usług:
+
+sudo systemctl enable --now virtqemud.socket
+sudo systemctl enable --now virtlogd.socket
+
+4. Dodaj swoje konto do grup
+
+Dzięki temu virt-manager będzie mógł zarządzać systemowymi maszynami wirtualnymi bez uruchamiania go jako root:
+
+
+sudo usermod -aG libvirt,kvm "$USER"
+
+Wyloguj się i zaloguj ponownie albo uruchom komputer ponownie:
+
+
+reboot
+
+Po ponownym zalogowaniu sprawdź grupy:
+
+
+groups
+
+Powinny być widoczne między innymi:
+text
+
+libvirt kvm
+
+5. Sprawdź libvirt i sieć domyślną
+
+
+virsh -c qemu:///system list --all
+
+Włącz automatyczne uruchamianie domyślnej sieci:
+
+
+sudo virsh net-autostart default
+
+Jeśli sieć nie jest uruchomiona, uruchom ją:
+
+
+sudo virsh net-start default
+
+Sprawdź jej stan:
+
+
+virsh -c qemu:///system net-list --all
+
+Sieć default zwykle zapewnia maszynom wirtualnym dostęp do Internetu przez NAT. ubuntu.com
+6. Uruchom i skonfiguruj virt-manager
+
+Uruchom program z menu systemowego albo poleceniem:
+
+
+virt-manager
+
+W programie:
+
+    Otwórz Plik → Dodaj połączenie.
+    Jako hypervisor wybierz QEMU/KVM.
+    Zaznacz Połącz z systemową instancją.
+    Pozostaw adres:
+    text
+
+    qemu:///system
+
+    Kliknij Połącz.
+
+virt-manager powinien pokazać połączenie QEMU/KVM oraz sieć default. Program służy do tworzenia maszyn, konfigurowania procesorów, pamięci, dysków i urządzeń wirtualnych. virt-manager.org
+7. Utwórz pierwszą maszynę wirtualną
+
+W virt-manager:
+
+    Kliknij Utwórz nową maszynę wirtualną.
+    Wybierz Lokalny nośnik instalacyjny ISO.
+    Wskaż plik ISO systemu operacyjnego.
+    Ustaw pamięć RAM i liczbę procesorów.
+    Utwórz dysk, na przykład:
+        format: qcow2,
+        rozmiar: 20–40 GB.
+    Wybierz sieć default: NAT.
+    Kliknij Zakończ i rozpocznij instalację.
+
+Weryfikacja końcowa
+
+
+virsh -c qemu:///system list --all
+
+Jeśli instalacja przebiegła prawidłowo, polecenie wyświetli utworzoną maszynę wirtualną. Możesz też sprawdzić załadowane moduły KVM:
+
+
+lsmod | grep kvm
+
+Dla procesora Intel powinien pojawić się moduł kvm_intel, a dla AMD — kvm_amd.
+
